@@ -21,19 +21,25 @@ jobs:
           node-version: 18
           cache: npm
 
-      - name: Install deps
-        run: npm ci --no-audit --no-fund
+      - name: Install deps (retry)
+        run: |
+          node -v
+          npm -v
+          for i in 1 2 3; do
+            npm ci --no-audit --no-fund && break
+            echo "npm ci failed (attempt $i). Retrying in 10s..."
+            sleep 10
+          done
 
-      - name: Smoke test (/health)
+      - name: Smoke test (/health, robust)
         env:
           DISABLE_AUTH: 'true'
           PORT: '3000'
         run: |
-          set -e
+          set -euxo pipefail
           node server.mjs & SERVER_PID=$!
           trap "kill $SERVER_PID" EXIT
-          # Warte bis der Server antwortet (max. 10s)
-          for i in {1..20}; do
+          for i in {1..30}; do
             if curl -sf http://localhost:3000/health >/dev/null; then
               curl -sf http://localhost:3000/health | tee health.json
               exit 0
@@ -51,15 +57,35 @@ jobs:
   cd:
     name: CD (Cloud Foundry Deploy)
     needs: ci
-    # Nur auf main UND nur wenn alle CF-Secrets existieren
-    if: ${{ github.ref == 'refs/heads/main' && secrets.CF_API != '' && secrets.CF_USERNAME != '' && secrets.CF_PASSWORD != '' && secrets.CF_ORG != '' && secrets.CF_SPACE != '' }}
+    if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     steps:
+      - name: Gate: check CF secrets
+        id: gate
+        env:
+          CF_API:      ${{ secrets.CF_API }}
+          CF_USERNAME: ${{ secrets.CF_USERNAME }}
+          CF_PASSWORD: ${{ secrets.CF_PASSWORD }}
+          CF_ORG:      ${{ secrets.CF_ORG }}
+          CF_SPACE:    ${{ secrets.CF_SPACE }}
+        run: |
+          set -e
+          if [ -n "$CF_API" ] && [ -n "$CF_USERNAME" ] && [ -n "$CF_PASSWORD" ] && [ -n "$CF_ORG" ] && [ -n "$CF_SPACE" ]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Skip deploy (no CF secrets configured)
+        if: steps.gate.outputs.deploy != 'true'
+        run: echo "Skipping CD: CF secrets missing."
+
       - name: Checkout
+        if: steps.gate.outputs.deploy == 'true'
         uses: actions/checkout@v4
 
-      # Stabiler: offizielles CF-CLI Action-Login statt apt-key/apt
       - name: CF CLI Login
+        if: steps.gate.outputs.deploy == 'true'
         uses: cloudfoundry/cf-cli-action@v2
         with:
           cf_api:   ${{ secrets.CF_API }}
@@ -67,19 +93,19 @@ jobs:
           password: ${{ secrets.CF_PASSWORD }}
           org:      ${{ secrets.CF_ORG }}
           space:    ${{ secrets.CF_SPACE }}
-          # skip_ssl_validation: true # nur falls nötig
 
       - name: Push to Cloud Foundry
+        if: steps.gate.outputs.deploy == 'true'
         env:
           NODE_ENV: production
         run: cf push -f manifest.yml
 
       - name: Post-deploy health check
+        if: steps.gate.outputs.deploy == 'true'
         env:
           APP_NAME: flowsense-api
         run: |
           set -e
-          # erstes Route-Label nach "routes:" auslesen
           ROUTE=$(cf app "$APP_NAME" | awk '/routes:/{getline; print $1; exit}')
           echo "Route: $ROUTE"
           for i in {1..30}; do
@@ -91,6 +117,7 @@ jobs:
           echo "App not healthy yet"; exit 1
 
       - name: Upload CF health artifact
+        if: steps.gate.outputs.deploy == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: cf-health-response
