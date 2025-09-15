@@ -4,6 +4,9 @@
 [![CI](https://github.com/Su-Sav/flowsense-api/actions/workflows/ci-cd.yml/badge.svg?branch=main)](https://github.com/Su-Sav/flowsense-api/actions/workflows/ci-cd.yml)
 [![Smoke](https://github.com/Su-Sav/flowsense-api/actions/workflows/smoke.yml/badge.svg?branch=main)](https://github.com/Su-Sav/flowsense-api/actions/workflows/smoke.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![OpenAPI](https://img.shields.io/badge/OpenAPI-3.1-6BA539)](openapi.yaml)
+
+
 
 
 Semantic error analysis for SAP CPI: klassifiziert Fehlerkontexte (LLM + JSON Schema) und liefert deterministische Entscheidungen (retry · park · incident) für Router & Audit.
