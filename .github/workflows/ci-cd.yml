@@ -9,38 +9,38 @@ on:
 
 jobs:
   ci:
-    name: CI (Lint/Install/Smoke Test)
+    name: CI (Install & Smoke)
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Use Node.js 18.x
+      - name: Use Node.js 18
         uses: actions/setup-node@v4
         with:
-          node-version: '18.x'
-          cache: 'npm'
+          node-version: 18
+          cache: npm
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Install deps
+        run: npm ci --no-audit --no-fund
 
-      # Placeholder for lint/tests if you add them later
-      - name: Lint (skipped - no linter configured)
-        run: echo "No lint step configured yet."
-
-      - name: Smoke test (start server & hit /health)
+      - name: Smoke test (/health)
         env:
           DISABLE_AUTH: 'true'
-          OPENAI_API_KEY: '${{ secrets.OPENAI_API_KEY || '' }}'
           PORT: '3000'
         run: |
-          node server.mjs &
-          SERVER_PID=$!
-          echo "Server PID: $SERVER_PID"
-          sleep 2
-          curl -sf http://localhost:3000/health | tee health.json
-          kill $SERVER_PID
+          set -e
+          node server.mjs & SERVER_PID=$!
+          trap "kill $SERVER_PID" EXIT
+          # Warte bis der Server antwortet (max. 10s)
+          for i in {1..20}; do
+            if curl -sf http://localhost:3000/health >/dev/null; then
+              curl -sf http://localhost:3000/health | tee health.json
+              exit 0
+            fi
+            sleep 0.5
+          done
+          echo "Server did not become healthy in time"; exit 1
 
       - name: Upload smoke test artifact
         uses: actions/upload-artifact@v4
@@ -51,46 +51,44 @@ jobs:
   cd:
     name: CD (Cloud Foundry Deploy)
     needs: ci
-    if: github.ref == 'refs/heads/main'
+    # Nur auf main UND nur wenn alle CF-Secrets existieren
+    if: ${{ github.ref == 'refs/heads/main' && secrets.CF_API != '' && secrets.CF_USERNAME != '' && secrets.CF_PASSWORD != '' && secrets.CF_ORG != '' && secrets.CF_SPACE != '' }}
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install CF CLI
-        run: |
-          wget -q -O - https://packages.cloudfoundry.org/debian/cli.cloudfoundry.org.key | sudo apt-key add -
-          echo "deb http://packages.cloudfoundry.org/debian stable main" | sudo tee /etc/apt/sources.list.d/cloudfoundry-cli.list
-          sudo apt-get update -y
-          sudo apt-get install -y cf8-cli || sudo apt-get install -y cf-cli
-
-      - name: CF Login
-        env:
-          CF_API: ${{ secrets.CF_API }}
-          CF_USERNAME: ${{ secrets.CF_USERNAME }}
-          CF_PASSWORD: ${{ secrets.CF_PASSWORD }}
-          CF_ORG: ${{ secrets.CF_ORG }}
-          CF_SPACE: ${{ secrets.CF_SPACE }}
-        run: |
-          cf api "$CF_API"
-          cf auth "$CF_USERNAME" "$CF_PASSWORD"
-          cf target -o "$CF_ORG" -s "$CF_SPACE"
+      # Stabiler: offizielles CF-CLI Action-Login statt apt-key/apt
+      - name: CF CLI Login
+        uses: cloudfoundry/cf-cli-action@v2
+        with:
+          cf_api:   ${{ secrets.CF_API }}
+          username: ${{ secrets.CF_USERNAME }}
+          password: ${{ secrets.CF_PASSWORD }}
+          org:      ${{ secrets.CF_ORG }}
+          space:    ${{ secrets.CF_SPACE }}
+          # skip_ssl_validation: true # nur falls nötig
 
       - name: Push to Cloud Foundry
         env:
           NODE_ENV: production
-        run: |
-          cf push -f manifest.yml
+        run: cf push -f manifest.yml
 
       - name: Post-deploy health check
         env:
           APP_NAME: flowsense-api
         run: |
-          APP_ROUTE=$(cf app "$APP_NAME" | awk '/routes:/ {print $2}')
-          echo "Route: $APP_ROUTE"
-          sleep 5
-          curl -sf "https://$APP_ROUTE/health" | tee cf-health.json
+          set -e
+          # erstes Route-Label nach "routes:" auslesen
+          ROUTE=$(cf app "$APP_NAME" | awk '/routes:/{getline; print $1; exit}')
+          echo "Route: $ROUTE"
+          for i in {1..30}; do
+            if curl -sf "https://$ROUTE/health" | tee cf-health.json; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "App not healthy yet"; exit 1
 
       - name: Upload CF health artifact
         uses: actions/upload-artifact@v4
