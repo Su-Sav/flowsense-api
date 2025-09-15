@@ -1,0 +1,262 @@
+openapi: 3.1.0
+info:
+  title: FlowSense API
+  version: 1.1.0
+  description: >
+    Semantic error analysis for SAP CPI using OpenAI Responses API + JSON Schema validation.
+    Returns structured, machine-readable guidance (retry/park/incident/complete). Auth via XSUAA JWT.
+servers:
+  - url: https://{host}
+    variables:
+      host:
+        default: example.com
+
+tags:
+  - name: debug
+    description: Development-only endpoints. Available only if EXPOSE_DEBUG_ENDPOINTS=true. Not deployed to Stage/Prod.
+
+paths:
+  /:
+    get:
+      summary: Service meta information
+      description: Minimal metadata to verify service availability and auth mode.
+      responses:
+        '200':
+          description: Service info
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name:
+                    type: string
+                    example: flowsense-api
+                  auth:
+                    type: string
+                    enum: [enabled, disabled]
+                    example: enabled
+                required: [name, auth]
+
+  /health:
+    get:
+      summary: Liveness check
+      description: Returns OK if the API process is alive. Does **not** check downstream (e.g., OpenAI).
+      responses:
+        '200':
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                required: [status]
+
+  /cb-state:
+    get:
+      summary: Circuit breaker state (debug only)
+      description: |
+        Returns the current process-local circuit breaker state.
+        **Only available if `EXPOSE_DEBUG_ENDPOINTS=true`.** Not exposed in Stage/Prod.
+        **No authentication is enforced** (matches implementation); do not enable on shared or production systems.
+      tags: [debug]
+      x-internal: true
+      x-feature-flag: EXPOSE_DEBUG_ENDPOINTS
+      # Explicitly override any global security: this operation is intentionally unsecured
+      security: []
+      responses:
+        '200':
+          description: State
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  open:
+                    type: boolean
+                    example: true
+                  fails:
+                    type: integer
+                    example: 5
+                  openUntil:
+                    type: integer
+                    description: Epoch milliseconds until breaker returns to half-open.
+                    example: 1725870000000
+                required: [open, fails, openUntil]
+        '404':
+          description: Not found (feature disabled or endpoint not exposed)
+
+  /analyze-error:
+    post:
+      summary: Analyze CPI error context and return structured guidance
+      description: >
+        Accepts an error context from CPI and responds with a structured decision payload.
+        If LLM call fails or response is invalid, a deterministic **fallback** is returned
+        (schema-conform, machine-readable).
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                flow:
+                  type: string
+                  description: Logical process name (e.g., OrderToCash)
+                  example: OrderToCash
+                stepName:
+                  type: string
+                  description: CPI step where the error occurred
+                  example: Map_Pricing
+                targetSystem:
+                  type: string
+                  description: Downstream system identifier
+                  example: PricingService
+                httpStatus:
+                  type: string
+                  description: HTTP status observed (string to keep formatting, e.g. "502")
+                  example: "502"
+                timestamp:
+                  type: string
+                  description: ISO-8601 timestamp of the event
+                  example: "2025-08-24T10:50:11Z"
+                errorMessage:
+                  type: string
+                  description: Raw error message/context
+                  example: "HTTP 502 Bad Gateway calling PricingService"
+                attempts:
+                  type: integer
+                  description: Current attempt count for this correlation
+                  example: 1
+            examples:
+              sample:
+                summary: Typical CPI error context
+                value:
+                  flow: OrderToCash
+                  stepName: Map_Pricing
+                  targetSystem: PricingService
+                  httpStatus: "502"
+                  timestamp: "2025-08-24T10:50:11Z"
+                  errorMessage: "HTTP 502 Bad Gateway calling PricingService"
+                  attempts: 1
+      responses:
+        '200':
+          description: Structured analysis (LLM or deterministic fallback)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  flow:
+                    type: string
+                    example: OrderToCash
+                  type:
+                    type: string
+                    description: Classified error type
+                    enum:
+                      - authentication
+                      - authorization
+                      - connectivity
+                      - payload_mapping
+                      - duplicate
+                      - configuration
+                      - business
+                      - unknown
+                    example: connectivity
+                  description:
+                    type: string
+                    example: "Error in 'Map_Pricing': HTTP 502 Bad Gateway while calling external PricingService."
+                  root_causes:
+                    type: array
+                    items:
+                      type: string
+                    example:
+                      - Upstream service downtime
+                      - Network instability
+                  suggested_fix:
+                    type: array
+                    items:
+                      type: string
+                    example:
+                      - Retry with exponential backoff
+                      - Check downstream availability
+                  retry_hint:
+                    type: object
+                    properties:
+                      allowed:
+                        type: boolean
+                        example: true
+                      after_seconds:
+                        type: integer
+                        minimum: 0
+                        example: 120
+                      max_attempts:
+                        type: integer
+                        minimum: 0
+                        example: 3
+                    required: [allowed, after_seconds, max_attempts]
+                  requires_manual:
+                    type: boolean
+                    example: false
+                  signals:
+                    type: object
+                    properties:
+                      http_status:
+                        type: string
+                        example: "502"
+                      target_system:
+                        type: string
+                        example: PricingService
+                      step:
+                        type: string
+                        example: Map_Pricing
+                    required: [http_status, target_system, step]
+                required:
+                  - flow
+                  - type
+                  - description
+                  - root_causes
+                  - suggested_fix
+                  - retry_hint
+                  - requires_manual
+                  - signals
+              examples:
+                llm:
+                  summary: LLM-backed response
+                  value:
+                    flow: OrderToCash
+                    type: connectivity
+                    description: "Error in 'Map_Pricing': HTTP 502 Bad Gateway while calling external PricingService."
+                    root_causes: ["Upstream service downtime", "Network instability"]
+                    suggested_fix: ["Retry with exponential backoff", "Check downstream availability"]
+                    retry_hint: { allowed: true, after_seconds: 120, max_attempts: 3 }
+                    requires_manual: false
+                    signals: { http_status: "502", target_system: "PricingService", step: "Map_Pricing" }
+                fallback:
+                  summary: Deterministic fallback response
+                  value:
+                    flow: "UnknownFlow"
+                    type: "connectivity"
+                    description: "Rule-based decision (upstream_failure) for status 0"
+                    root_causes: ["upstream_failure", "http_status=0"]
+                    suggested_fix:
+                      - "Retry with exponential backoff"
+                      - "Check downstream health & credentials"
+                    retry_hint: { allowed: true, after_seconds: 60, max_attempts: 6 }
+                    requires_manual: false
+                    signals: { http_status: "0", target_system: "", step: "" }
+        '401':
+          description: Missing or invalid token
+        '403':
+          description: Insufficient scope or unauthorized client
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

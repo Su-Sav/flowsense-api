@@ -1,0 +1,19 @@
+{
+  "xsappname": "flowsense-api",
+  "tenant-mode": "dedicated",
+  "scopes": [
+    {
+      "name": "$XSAPPNAME.flowsense.execute",
+      "description": "Call FlowSense analyze endpoint"
+    }
+  ],
+  "role-templates": [
+    {
+      "name": "FlowSenseExecutor",
+      "description": "Allows calling analyze endpoint",
+      "scope-references": [
+        "$XSAPPNAME.flowsense.execute"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+### Base URL for local dev (adjust as needed)
+@base = http://localhost:3000
+
+### Health
+GET {{base}}/health
+
+### Meta
+GET {{base}}/
+
+### Analyze (LLM path or fallback if timeout triggers)
+POST {{base}}/analyze-error
+Content-Type: application/json
+
+{
+  "flow": "CreateOrder_ES5",
+  "stepName": "HTTP_Receiver",
+  "targetSystem": "ES5",
+  "httpStatus": "500",
+  "errorMessage": "Internal Server Error",
+  "attempts": 2
+}

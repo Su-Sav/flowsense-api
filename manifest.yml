@@ -1,0 +1,12 @@
+applications:
+  - name: flowsense-api
+    random-route: true
+    memory: 256M
+    buildpacks:
+      - nodejs_buildpack
+    services:
+      - flowsense-uaa
+    env:
+      NODE_ENV: production
+      XSAPPNAME: flowsense-api
+

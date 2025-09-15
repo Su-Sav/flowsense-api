@@ -1,0 +1,71 @@
+{
+  "info": {
+    "name": "FlowSense API",
+    "_postman_id": "b7f3a1b4-6a6e-4a9d-a001-000000000001",
+    "description": "Minimal collection to exercise FlowSense API (health, meta, analyze)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/health",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "health"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Meta",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            ""
+          ]
+        }
+      }
+    },
+    {
+      "name": "Analyze error",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"flow\": \"CreateOrder_ES5\", \"stepName\": \"HTTP_Receiver\", \"targetSystem\": \"ES5\", \"httpStatus\": \"500\", \"errorMessage\": \"Internal Server Error\", \"attempts\": 2}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/analyze-error",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "analyze-error"
+          ]
+        }
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000"
+    }
+  ]
+}
