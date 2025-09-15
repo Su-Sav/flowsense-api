@@ -12,32 +12,28 @@ jobs:
     name: CI (Install & Smoke)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Use Node.js 18
+        uses: actions/setup-node@v4
         with:
           node-version: 18
           cache: npm
 
-      - name: Install deps (retry)
-        run: |
-          node -v
-          npm -v
-          for i in 1 2 3; do
-            npm ci --no-audit --no-fund && break
-            echo "npm ci failed (attempt $i). Retrying in 10s..."
-            sleep 10
-          done
+      - name: Install deps
+        run: npm ci --no-audit --no-fund
 
-      - name: Smoke test (/health, robust)
+      - name: Smoke test (/health)
         env:
           DISABLE_AUTH: 'true'
           PORT: '3000'
         run: |
-          set -euxo pipefail
+          set -e
           node server.mjs & SERVER_PID=$!
           trap "kill $SERVER_PID" EXIT
-          for i in {1..30}; do
+          # Warte bis der Server antwortet (max. 10s)
+          for i in {1..20}; do
             if curl -sf http://localhost:3000/health >/dev/null; then
               curl -sf http://localhost:3000/health | tee health.json
               exit 0
@@ -46,7 +42,8 @@ jobs:
           done
           echo "Server did not become healthy in time"; exit 1
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload smoke test artifact
+        uses: actions/upload-artifact@v4
         with:
           name: health-response
           path: health.json
@@ -54,18 +51,15 @@ jobs:
   cd:
     name: CD (Cloud Foundry Deploy)
     needs: ci
-    if: github.ref == 'refs/heads/main'
+    # Nur auf main UND nur wenn alle CF-Secrets existieren
+    if: ${{ github.ref == 'refs/heads/main' && secrets.CF_API != '' && secrets.CF_USERNAME != '' && secrets.CF_PASSWORD != '' && secrets.CF_ORG != '' && secrets.CF_SPACE != '' }}
     runs-on: ubuntu-latest
     steps:
-      - name: Skip deploy (no CF secrets configured)
-        if: ${{ !(secrets.CF_API && secrets.CF_USERNAME && secrets.CF_PASSWORD && secrets.CF_ORG && secrets.CF_SPACE) }}
-        run: echo "Skipping CD: CF secrets missing."
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/checkout@v4
-        if: ${{ secrets.CF_API && secrets.CF_USERNAME && secrets.CF_PASSWORD && secrets.CF_ORG && secrets.CF_SPACE }}
-
+      # Stabiler: offizielles CF-CLI Action-Login statt apt-key/apt
       - name: CF CLI Login
-        if: ${{ secrets.CF_API && secrets.CF_USERNAME && secrets.CF_PASSWORD && secrets.CF_ORG && secrets.CF_SPACE }}
         uses: cloudfoundry/cf-cli-action@v2
         with:
           cf_api:   ${{ secrets.CF_API }}
@@ -73,19 +67,19 @@ jobs:
           password: ${{ secrets.CF_PASSWORD }}
           org:      ${{ secrets.CF_ORG }}
           space:    ${{ secrets.CF_SPACE }}
+          # skip_ssl_validation: true # nur falls nötig
 
       - name: Push to Cloud Foundry
-        if: ${{ secrets.CF_API && secrets.CF_USERNAME && secrets.CF_PASSWORD && secrets.CF_ORG && secrets.CF_SPACE }}
         env:
           NODE_ENV: production
         run: cf push -f manifest.yml
 
       - name: Post-deploy health check
-        if: ${{ secrets.CF_API && secrets.CF_USERNAME && secrets.CF_PASSWORD && secrets.CF_ORG && secrets.CF_SPACE }}
         env:
           APP_NAME: flowsense-api
         run: |
           set -e
+          # erstes Route-Label nach "routes:" auslesen
           ROUTE=$(cf app "$APP_NAME" | awk '/routes:/{getline; print $1; exit}')
           echo "Route: $ROUTE"
           for i in {1..30}; do
@@ -96,9 +90,8 @@ jobs:
           done
           echo "App not healthy yet"; exit 1
 
-      - uses: actions/upload-artifact@v4
-        if: ${{ secrets.CF_API && secrets.CF_USERNAME && secrets.CF_PASSWORD && secrets.CF_ORG && secrets.CF_SPACE }}
+      - name: Upload CF health artifact
+        uses: actions/upload-artifact@v4
         with:
           name: cf-health-response
           path: cf-health.json
-
